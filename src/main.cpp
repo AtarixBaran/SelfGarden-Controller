@@ -3,6 +3,7 @@
 #include <ArduinoOTA.h>
 #include <HTTPClient.h>
 #include <WiFi.h>
+#include <WebServer.h>
 
 #include <esp_int_wdt.h>
 #include <esp_task_wdt.h>
@@ -35,11 +36,16 @@ const char* password = WIFI_PASSWORD;
 
 #define HOSTNAME "hydroponic-controller"
 
+
 int waiting = 0;
 bool turnOn = true;
 
 void loopWifiKeepAlive(void* pvParameters);
 void loopPump(void* pvParameters);
+
+
+
+
 
 void send_notification(char const* key, char const* value)
 {
@@ -122,6 +128,7 @@ void setup(void)
     // start serial port
     Serial.begin(115200);
     Serial.println("Merhaba! ESP32 çalışıyor.");
+    Serial.println(WiFi.localIP());
 
     Serial.printf("Connecting to %s ", ssid);
     setCpuFrequencyMhz(80);
@@ -273,3 +280,5 @@ void loop(void)
 {
     ArduinoOTA.handle();
 }
+
+
