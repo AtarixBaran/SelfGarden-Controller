@@ -1,7 +1,6 @@
 
 #include <Arduino.h>
 #include <ArduinoOTA.h>
-#include <BlynkSimpleEsp32.h>
 #include <HTTPClient.h>
 #include <WiFi.h>
 
@@ -109,12 +108,7 @@ void OTASetup()
     ArduinoOTA.begin();
 }
 
-void setupBlynk()
-{
-    char auth[] = BLYNK_TOKEN;
-    Blynk.begin(auth, ssid, password);
-    Blynk.syncAll();
-}
+
 
 void setupPump(void)
 {
@@ -126,7 +120,8 @@ void setupPump(void)
 void setup(void)
 {
     // start serial port
-    Serial.begin(9600);
+    Serial.begin(115200);
+    Serial.println("Merhaba! ESP32 çalışıyor.");
 
     Serial.printf("Connecting to %s ", ssid);
     setCpuFrequencyMhz(80);
@@ -140,7 +135,6 @@ void setup(void)
     Serial.print("connected");
 
     OTASetup();
-    setupBlynk();
     setupPump();
 
     configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
@@ -158,7 +152,7 @@ void turnPumpOff()
     turnOn = false;
     waiting = 0;
     send_notification("pump", "0");
-    Blynk.virtualWrite(V1, LOW);
+  
 }
 
 void turnPumpOn()
@@ -167,19 +161,8 @@ void turnPumpOn()
     waiting = 0;
     send_notification("pump", "1");
 
-    Blynk.virtualWrite(V1, HIGH);
 }
 
-BLYNK_WRITE(V1) // Button to turn the pump on/off
-{
-    int pinData = param.asInt();
-
-    if (pinData == 1) {
-        turnPumpOn();
-    } else {
-        turnPumpOff();
-    }
-}
 
 
 void loopWifiKeepAlive(void* pvParameters)
@@ -229,8 +212,7 @@ void loopTDSMeter(void* pvParameters)
         Serial.println("loopTDSMeter waiting...");
         meter.readTDSValue();
 
-        Blynk.virtualWrite(V0, meter.getTDSValue());
-        Blynk.virtualWrite(V2, meter.getTemperature());
+     
 
         char tdsValueStr[8] = { 0 };
         char temperatureStr[8] = { 0 };
@@ -289,6 +271,5 @@ void loopPump(void* pvParameters)
 
 void loop(void)
 {
-    Blynk.run();
     ArduinoOTA.handle();
 }
