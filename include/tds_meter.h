@@ -10,6 +10,7 @@ public:
     float readTemperature();
     float getTemperature() { return this->temperature; };
     float readTDSValue();
+    float mockTDSValue();
     float getTDSValue() { return this->tdsValue; };
 
 private:

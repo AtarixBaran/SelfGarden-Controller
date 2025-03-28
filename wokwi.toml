@@ -2,3 +2,7 @@
 version = 1
 firmware = '.pio/build/lolin32/firmware.bin'
 elf = '.pio/build/lolin32/firmware.elf'
+
+[[net.forward]]
+from = "localhost:8180"
+to = "target:80"
