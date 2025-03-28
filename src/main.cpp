@@ -135,6 +135,7 @@ void setup()
 
     xTaskCreatePinnedToCore(loopWifiKeepAlive, "loopWifiKeepAlive", 4096, NULL, 3, NULL, ARDUINO_RUNNING_CORE);
     xTaskCreatePinnedToCore(loopPump, "loopPump", 4096, NULL, 2, NULL, 0);
+    xTaskCreatePinnedToCore(loopTDSMeter, "loopTDSMeter", 4096, NULL, 1, NULL, ARDUINO_RUNNING_CORE);
     xTaskCreatePinnedToCore(loopRainSensor, "loopRainSensor", 2048, NULL, 1, NULL, ARDUINO_RUNNING_CORE);
 }
 
@@ -154,6 +155,34 @@ void turnPumpOn()
     turnOn = true;
     waiting = 0;
 }
+
+void loopTDSMeter(void* pvParameters)
+ {
+     TDSMeter meter;
+ 
+     while (42) {
+         // If the pump is currently ON wait a bit for the pump to finish before sampling
+         while (turnOn == true) {
+             Serial.println("Waiting for pump to finish before TDS testing...");
+             vTaskDelay(1000 / portTICK_PERIOD_MS);
+         }
+         Serial.println("loopTDSMeter waiting...");
+         meter.readTDSValue();
+ 
+      
+ 
+         char tdsValueStr[8] = { 0 };
+         char temperatureStr[8] = { 0 };
+ 
+         snprintf(tdsValueStr, sizeof(tdsValueStr), "%f", meter.getTDSValue());
+         snprintf(temperatureStr, sizeof(temperatureStr), "%f", meter.getTemperature());
+ 
+        //  send_notification("tds", tdsValueStr);
+        //  send_notification("temp", temperatureStr);
+ 
+         vTaskDelay(5UL * 60UL * 60UL * 1000UL / portTICK_PERIOD_MS); // 5 hours wait
+     }
+ }
 
 void loopWifiKeepAlive(void *pvParameters)
 {
