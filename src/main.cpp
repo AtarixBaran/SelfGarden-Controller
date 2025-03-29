@@ -1,26 +1,32 @@
+#define BLYNK_TEMPLATE_ID "TMPL6aXGddioc"
+#define BLYNK_TEMPLATE_NAME "ESP32"
+#define BLYNK_AUTH_TOKEN "FdbGiw-HZfU-rSay6D15jnOnyCNUO-UU"
+
 #include <Arduino.h>
 #include <ArduinoOTA.h>
 #include <HTTPClient.h>
 #include <WiFi.h>
 #include <WebServer.h>
-
 #include <esp_int_wdt.h>
 #include <esp_task_wdt.h>
-
+#include <Wire.h>
+#include <Adafruit_APDS9960.h>
+#include <BlynkSimpleEsp32.h>
 #include <time.h>
 #define GMT_OFFSET_SEC 3600 * 9
 #define DAYLIGHT_OFFSET_SEC 0
-#define NTP_SERVER "jp.pool.ntp.org"
 
 #include "secrets.h"
 #include "tds_meter.h"
 
 #define relayPumpPin 14
 #define RAIN_SENSOR_PIN 34
-#define WATER_PUMP_PIN 18  // 💧 Water Pump için GPIO 18 tanımı
+#define WATER_PUMP_PIN 18
+
+Adafruit_APDS9960 apds;
+bool apdsOk = false;
 
 String rainStatus = "Bilinmiyor";
-
 const char *ssid = WIFI_SSID;
 const char *password = WIFI_PASSWORD;
 
@@ -46,22 +52,20 @@ String getDynamicHostname()
 #define PUMP_OFF_DURATION_MINUTES 15
 
 WebServer server(80);
-
 int waiting = 0;
 bool turnOn = true;
 
 void loopWifiKeepAlive(void *pvParameters);
 void loopPump(void *pvParameters);
 void loopRainSensor(void *pvParameters);
+void loopTDSMeter(void *pvParameters);
 void turnPumpOn();
 void turnPumpOff();
 void handleRoot();
-
+void handleUpdate();  // Web OTA için fonksiyon prototipi
 void OTASetup()
 {
     ArduinoOTA.setHostname(getDynamicHostname().c_str());
-    Serial.println("Dynamic Hostname: " + getDynamicHostname());
-    Serial.println("OTA URL: http://" + getDynamicHostname() + ".local");
 
     ArduinoOTA
         .onStart([]()
@@ -87,8 +91,8 @@ void OTASetup()
 void setupPump()
 {
     pinMode(relayPumpPin, OUTPUT);
-    pinMode(WATER_PUMP_PIN, OUTPUT);        // 💧 Water pump pin modu
-    digitalWrite(WATER_PUMP_PIN, LOW);      // Başlangıçta kapalı olsun
+    pinMode(WATER_PUMP_PIN, OUTPUT);
+    digitalWrite(WATER_PUMP_PIN, LOW);
     turnOn = true;
     waiting = 0;
 }
@@ -98,18 +102,20 @@ void setup()
     Serial.begin(115200);
     Serial.println("Merhaba! ESP32 çalışıyor.");
 
-    Serial.printf("Connecting to %s ", ssid);
     setCpuFrequencyMhz(80);
 
-    WiFi.begin(ssid, password);
-    while (WiFi.status() != WL_CONNECTED)
-    {
-        vTaskDelay(500 / portTICK_PERIOD_MS);
-        Serial.print(".");
-    }
-    Serial.print("connected");
+    Blynk.begin(BLYNK_AUTH_TOKEN, ssid, password);
 
     pinMode(RAIN_SENSOR_PIN, INPUT);
+    Wire.begin(21, 22);
+
+    if (apds.begin()) {
+        Serial.println("APDS-9960 başlatıldı.");
+        apds.enableColor(true);
+        apdsOk = true;
+    } else {
+        Serial.println("APDS-9960 başlatılamadı!");
+    }
 
     server.on("/", handleRoot);
     server.on("/pump_on", []()
@@ -123,12 +129,21 @@ void setup()
                   server.sendHeader("Location", "/", true);
                   server.send(302, "text/plain", ""); });
 
-   
     server.begin();
-    Serial.println("ESP32 Web Server Aktif: http://localhost:8180");
-
     OTASetup();
     setupPump();
+    Serial.println(WiFi.localIP());
+
+
+
+    // server.on("/webota", HTTP_GET, []() {
+    //     server.send(200, "text/html",
+    //                 "<form method='POST' action='/update' enctype='multipart/form-data'>"
+    //                 "<input type='file' name='update'><input type='submit' value='Güncelle'></form>");
+    //   });
+      
+    //   server.on("/update", HTTP_POST, []() {}, handleUpdate);
+
 
     configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, "pool.ntp.org", "time.nist.gov", "time.google.com");
     esp_task_wdt_init(3, false);
@@ -139,10 +154,20 @@ void setup()
     xTaskCreatePinnedToCore(loopRainSensor, "loopRainSensor", 2048, NULL, 1, NULL, ARDUINO_RUNNING_CORE);
 }
 
+BLYNK_WRITE(V18) {
+  int value = param.asInt();
+  if (value == 1) {
+    turnPumpOn();
+  } else {
+    turnPumpOff();
+  }
+}
+
+
+
 void turnPumpOff()
 {
-    digitalWrite(WATER_PUMP_PIN, LOW);
-
+    digitalWrite(WATER_PUMP_PIN, HIGH);
     Serial.println("Pump is turned off");
     turnOn = false;
     waiting = 0;
@@ -150,39 +175,11 @@ void turnPumpOff()
 
 void turnPumpOn()
 {
-    digitalWrite(WATER_PUMP_PIN, HIGH);
+    digitalWrite(WATER_PUMP_PIN, LOW);
     Serial.println("Pump is turned on");
     turnOn = true;
     waiting = 0;
 }
-
-void loopTDSMeter(void* pvParameters)
- {
-     TDSMeter meter;
- 
-     while (42) {
-         // If the pump is currently ON wait a bit for the pump to finish before sampling
-         while (turnOn == true) {
-             Serial.println("Waiting for pump to finish before TDS testing...");
-             vTaskDelay(1000 / portTICK_PERIOD_MS);
-         }
-         Serial.println("loopTDSMeter waiting...");
-         meter.readTDSValue();
- 
-      
- 
-         char tdsValueStr[8] = { 0 };
-         char temperatureStr[8] = { 0 };
- 
-         snprintf(tdsValueStr, sizeof(tdsValueStr), "%f", meter.getTDSValue());
-         snprintf(temperatureStr, sizeof(temperatureStr), "%f", meter.getTemperature());
- 
-        //  send_notification("tds", tdsValueStr);
-        //  send_notification("temp", temperatureStr);
- 
-         vTaskDelay(5UL * 60UL * 60UL * 1000UL / portTICK_PERIOD_MS); // 5 hours wait
-     }
- }
 
 void loopWifiKeepAlive(void *pvParameters)
 {
@@ -190,29 +187,26 @@ void loopWifiKeepAlive(void *pvParameters)
     while (true)
     {
         esp_task_wdt_reset();
-        if (WiFi.status() == WL_CONNECTED)
-        {
-            vTaskDelay(1000 / portTICK_PERIOD_MS);
-            continue;
-        }
-
-        Serial.println("[WIFI] Connecting");
-        WiFi.begin(ssid, password);
-        unsigned long startAttemptTime = millis();
-
-        while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < WIFI_TIMEOUT_MS)
-        {
-            vTaskDelay(500 / portTICK_PERIOD_MS);
-        }
-
         if (WiFi.status() != WL_CONNECTED)
         {
-            Serial.println("[WIFI] FAILED");
-            vTaskDelay(WIFI_RECOVER_TIME_MS / portTICK_PERIOD_MS);
-            continue;
-        }
+            
+            
+            
+            Blynk.virtualWrite(V0, "WiFi: BAĞLI DEĞİL ❌");
 
-        Serial.println("[WIFI] Connected: " + WiFi.localIP());
+            Serial.println("[WIFI] Reconnecting...");
+            WiFi.begin(ssid, password);
+            unsigned long startAttemptTime = millis();
+            while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < WIFI_TIMEOUT_MS)
+            {
+                vTaskDelay(500 / portTICK_PERIOD_MS);
+            }
+        }
+        else{
+            Blynk.virtualWrite(V0, "WiFi: AT  ✅");
+            Serial.println("[WIFI] Connected!");
+        }
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
 }
 
@@ -225,7 +219,6 @@ void loopPump(void *pvParameters)
     while (true)
     {
         int secToWait = 60 * (turnOn ? PUMP_ON_DURATION_MINUTES : PUMP_OFF_DURATION_MINUTES);
-
         if (getLocalTime(&timeinfo))
         {
             if (!turnOn && timeinfo.tm_hour >= 6 && timeinfo.tm_hour < 20)
@@ -235,7 +228,6 @@ void loopPump(void *pvParameters)
         }
 
         digitalWrite(relayPumpPin, turnOn ? HIGH : LOW);
-
         if (waiting >= secToWait)
         {
             waiting = 0;
@@ -248,19 +240,49 @@ void loopPump(void *pvParameters)
     }
 }
 
+void loopTDSMeter(void *pvParameters)
+{
+    TDSMeter meter;
+    while (true)
+    {
+        while (turnOn == true) {
+            Serial.println("Waiting for pump to finish before TDS testing...");
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+        }
+
+        Serial.println("TDS ölçümü yapılıyor...");
+        meter.readTDSValue();
+
+        char tdsValueStr[8] = { 0 };
+        char temperatureStr[8] = { 0 };
+
+        snprintf(tdsValueStr, sizeof(tdsValueStr), "%f", meter.getTDSValue());
+        snprintf(temperatureStr, sizeof(temperatureStr), "%f", meter.getTemperature());
+        int randomValue = random(0, 1000);
+        Serial.print("TDS: "); Serial.println(randomValue);
+        Serial.print("Sıcaklık: "); Serial.println(temperatureStr);
+        Blynk.virtualWrite(V1, randomValue);
+
+        vTaskDelay(2000 / portTICK_PERIOD_MS);
+    }
+}
+
 void loopRainSensor(void *pvParameters)
 {
     while (true)
     {
-        int rainValue = analogRead(RAIN_SENSOR_PIN);
-        Serial.print("Rain Sensor Value: ");
-        Serial.println(rainValue);
+        if (apdsOk && apds.colorDataReady()) {
+            uint16_t r, g, b, c;
+            apds.getColorData(&r, &g, &b, &c);
+            Serial.printf("R: %u G: %u B: %u C: %u\n", r, g, b, c);
+        } 
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
 }
 
 void loop()
 {
+    Blynk.run();
     ArduinoOTA.handle();
     server.handleClient();
 }
@@ -306,3 +328,29 @@ void handleRoot()
 
     server.send(200, "text/html", html);
 }
+
+
+void handleUpdate() {
+    HTTPUpload& upload = server.upload();
+    if (upload.status == UPLOAD_FILE_START) {
+      Serial.printf("OTA Başladı: %s\n", upload.filename.c_str());
+      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+        Update.printError(Serial);
+      }
+    } else if (upload.status == UPLOAD_FILE_WRITE) {
+      if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+        Update.printError(Serial);
+      }
+    } else if (upload.status == UPLOAD_FILE_END) {
+      if (Update.end(true)) {
+        Serial.printf("OTA Başarılı! Toplam Boyut: %u bytes\n", upload.totalSize);
+        server.sendHeader("Connection", "close");
+        server.send(200, "text/plain", "Güncelleme başarılı. Cihaz yeniden başlatılıyor...");
+        delay(2000);
+        ESP.restart();
+      } else {
+        Update.printError(Serial);
+        server.send(500, "text/plain", "Güncelleme Hatası");
+      }
+    }
+  }
