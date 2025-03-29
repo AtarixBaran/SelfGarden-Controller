@@ -136,13 +136,13 @@ void setup()
 
 
 
-    // server.on("/webota", HTTP_GET, []() {
-    //     server.send(200, "text/html",
-    //                 "<form method='POST' action='/update' enctype='multipart/form-data'>"
-    //                 "<input type='file' name='update'><input type='submit' value='Güncelle'></form>");
-    //   });
+    server.on("/webota", HTTP_GET, []() {
+        server.send(200, "text/html",
+                    "<form method='POST' action='/update' enctype='multipart/form-data'>"
+                    "<input type='file' name='update'><input type='submit' value='Güncelle'></form>");
+      });
       
-    //   server.on("/update", HTTP_POST, []() {}, handleUpdate);
+      server.on("/update", HTTP_POST, []() {}, handleUpdate);
 
 
     configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, "pool.ntp.org", "time.nist.gov", "time.google.com");
@@ -203,7 +203,7 @@ void loopWifiKeepAlive(void *pvParameters)
             }
         }
         else{
-            Blynk.virtualWrite(V0, "WiFi: AT  ✅");
+            Blynk.virtualWrite(V0, "TEST2  ✅");
             Serial.println("[WIFI] Connected!");
         }
         vTaskDelay(1000 / portTICK_PERIOD_MS);
