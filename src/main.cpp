@@ -1,6 +1,6 @@
-#define BLYNK_TEMPLATE_ID "TMPL6tNClfNf5"
-#define BLYNK_TEMPLATE_NAME "ESP32"
-#define BLYNK_AUTH_TOKEN "indZF7SeCZJD-8VBvIwRySAfwdmVC3mD"
+#define BLYNK_TEMPLATE_ID "TMPL6kluPqbNR"
+#define BLYNK_TEMPLATE_NAME "esp"
+#define BLYNK_AUTH_TOKEN "ckz7cJlCU7jSMkuoXq1jt11d7CSYQSrv"
 
 #include <Arduino.h>
 #include <ArduinoOTA.h>
@@ -29,6 +29,13 @@
 #define PH_SENSOR_PIN 33
 #define EC_SENSOR_PIN 32
 
+
+#define POMP_PH_UP_PIN 15
+#define POMP_PH_DOWN_PIN 16
+#define POMP_A_PIN 17
+#define POMP_B_PIN 18
+
+
 Adafruit_APDS9960 apds;
 bool apdsOk = false;
 
@@ -39,7 +46,6 @@ ModbusMaster sensor1;
 ModbusMaster sensor2;
 
 
-String rainStatus = "Bilinmiyor";
 const char *ssid = WIFI_SSID;
 const char *password = WIFI_PASSWORD;
 
@@ -83,7 +89,6 @@ void loopRainSensor(void *pvParameters);
 void loopTDSMeter(void *pvParameters);
 void loopPHSensor(void *pvParameters);
 void NPKSensor(void *pvParameters);
-void turnPumpOn();
 void turnPumpOff();
 void handleRoot();
 void handleUpdate(); // Web OTA için fonksiyon prototipi
@@ -129,7 +134,7 @@ void loopcheckEC(void *pvParameters)
     Serial.print(ecValue, 2);
     Serial.println(" µS/cm");
 
-    Blynk.virtualWrite(V3, ecValue);
+    Blynk.virtualWrite(V4, ecValue);
 
     vTaskDelay(1000 / portTICK_PERIOD_MS);
   }
@@ -139,6 +144,21 @@ void setupPump()
 {
   pinMode(relayPumpPin, OUTPUT);
   pinMode(WATER_PUMP_PIN, OUTPUT);
+
+  pinMode(PH_SENSOR_PIN, OUTPUT);
+  pinMode(EC_SENSOR_PIN, OUTPUT);
+  pinMode(POMP_A_PIN, OUTPUT);
+  pinMode(POMP_B_PIN, OUTPUT);
+  pinMode(POMP_PH_UP_PIN, OUTPUT);
+  pinMode(POMP_PH_DOWN_PIN, OUTPUT);
+
+  digitalWrite(POMP_A_PIN, HIGH);
+  digitalWrite(POMP_B_PIN, HIGH);
+  digitalWrite(PH_SENSOR_PIN, HIGH);
+  digitalWrite(POMP_PH_UP_PIN, HIGH);
+  digitalWrite(POMP_PH_DOWN_PIN, HIGH);
+
+
   digitalWrite(WATER_PUMP_PIN, LOW);
   turnOn = true;
   waiting = 0;
@@ -149,6 +169,23 @@ void setup()
   Serial.begin(115200);
   Serial.println("Merhaba! ESP32 çalışıyor.");
 
+  WiFi.mode(WIFI_STA);
+  WiFiManager wm;
+  wm.setTimeout(180); // 3 dakika içinde işlem yapılmazsa restart
+  if (!wm.autoConnect("Hidroponik-Setup", "12345678")) {
+    Serial.println("WiFi bağlantısı sağlanamadı. ESP yeniden başlatılıyor...");
+    delay(3000);
+    ESP.restart();
+  }
+
+  Serial.println("WiFi bağlantısı başarılı! IP: " + WiFi.localIP().toString());
+  
+  // --- Blynk bağlantısı ---
+  Blynk.config(BLYNK_AUTH_TOKEN);
+  Blynk.connect();
+
+ 
+
   setCpuFrequencyMhz(80);
 
   pinMode(MAX485_DE_RE, OUTPUT);
@@ -158,17 +195,7 @@ void setup()
 
 
 
-  sensor1.begin(1, Serial2); // Sensor 1 - Slave ID 1
-  sensor1.preTransmission(preTransmission);
-  sensor1.postTransmission(postTransmission);
-
-  sensor2.begin(2, Serial2); // Sensor 2 - Slave ID 2
-  sensor2.preTransmission(preTransmission);
-  sensor2.postTransmission(postTransmission);
-
-
-
-  Blynk.begin(BLYNK_AUTH_TOKEN, ssid, password);
+  // Blynk.begin(BLYNK_AUTH_TOKEN, ssid, password);
 
   pinMode(RAIN_SENSOR_PIN, INPUT);
   Wire.begin(21, 22);
@@ -187,7 +214,7 @@ void setup()
   server.on("/", handleRoot);
   server.on("/pump_on", []()
             {
-                  turnPumpOn();
+                  // turnPumpOn();
                   server.sendHeader("Location", "/", true);
                   server.send(302, "text/plain", ""); });
   server.on("/pump_off", []()
@@ -211,68 +238,118 @@ void setup()
   configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, "pool.ntp.org", "time.nist.gov", "time.google.com");
   esp_task_wdt_init(3, false);
 
-  xTaskCreatePinnedToCore(loopWifiKeepAlive, "loopWifiKeepAlive", 4096, NULL, 3, NULL, ARDUINO_RUNNING_CORE);
+  // xTaskCreatePinnedToCore(loopWifiKeepAlive, "loopWifiKeepAlive", 4096, NULL, 3, NULL, ARDUINO_RUNNING_CORE);
   // xTaskCreatePinnedToCore(loopPump, "loopPump", 4096, NULL, 2, NULL, 0);
   // xTaskCreatePinnedToCore(loopTDSMeter, "loopTDSMeter", 4096, NULL, 1, NULL, ARDUINO_RUNNING_CORE);
-  //  xTaskCreatePinnedToCore(loopPHSensor, "loopPHSensor", 4096, NULL, 1, NULL, ARDUINO_RUNNING_CORE);
-   xTaskCreatePinnedToCore(NPKSensor, "NPKSensor", 4096, NULL, 1, NULL, ARDUINO_RUNNING_CORE);
-  // xTaskCreatePinnedToCore(loopcheckEC, "loopcheckEC", 4096, NULL, 1, NULL, ARDUINO_RUNNING_CORE);
+    xTaskCreatePinnedToCore(loopPHSensor, "loopPHSensor", 4096, NULL, 1, NULL, ARDUINO_RUNNING_CORE);
+ xTaskCreatePinnedToCore(loopcheckEC, "loopcheckEC", 4096, NULL, 1, NULL, ARDUINO_RUNNING_CORE);
 }
 
 
-void NPKSensor(void *pvParameters)
+// void NPKSensor(void *pvParameters)
+// {
+
+//   while (true)
+//   {
+//     uint8_t result1 = sensor1.readInputRegisters(0x00, 7);
+//     if (result1 == sensor1.ku8MBSuccess) {
+//       Serial.print("[Sensor 1] Nem: ");
+//       Serial.println(sensor1.getResponseBuffer(0));
+//     } else {
+//       Serial.print("[Sensor 1] Hata: ");
+//       Serial.println(result1);
+//     }
+  
+//     delay(500);
+  
+//     uint8_t result2 = sensor2.readInputRegisters(0x00, 7);
+//     if (result2 == sensor2.ku8MBSuccess) {
+//       Serial.print("[Sensor 2] Nem: ");
+//       Serial.println(sensor2.getResponseBuffer(0));
+//     } else {
+//       Serial.print("[Sensor 2] Hata: ");
+//       Serial.println(result2);
+//     }
+  
+
+//     vTaskDelay(1000 / portTICK_PERIOD_MS);
+//   }
+    
+  
+// }
+
+void turnPumpOn(int pin)
 {
+  digitalWrite(pin, LOW);
+  Serial.println("Pump is turned on");
+  turnOn = true;
+  waiting = 0;
+}
 
-  while (true)
-  {
-    uint8_t result1 = sensor1.readInputRegisters(0x00, 7);
-    if (result1 == sensor1.ku8MBSuccess) {
-      Serial.print("[Sensor 1] Nem: ");
-      Serial.println(sensor1.getResponseBuffer(0));
-    } else {
-      Serial.print("[Sensor 1] Hata: ");
-      Serial.println(result1);
-    }
-  
-    delay(500);
-  
-    uint8_t result2 = sensor2.readInputRegisters(0x00, 7);
-    if (result2 == sensor2.ku8MBSuccess) {
-      Serial.print("[Sensor 2] Nem: ");
-      Serial.println(sensor2.getResponseBuffer(0));
-    } else {
-      Serial.print("[Sensor 2] Hata: ");
-      Serial.println(result2);
-    }
-  
+void resetWiFi() {
+  WiFiManager wm;
+  wm.resetSettings();  // Flash'taki WiFi bilgilerini siler
+  delay(1000);  
+  ESP.restart();       // Cihazı yeniden başlatır
+}
 
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
+
+int getPhysicalPinForVirtualPin(int vpin) {
+  switch (vpin) {
+    case V15: return POMP_PH_UP_PIN;
+    case V16: return POMP_PH_DOWN_PIN;
+    case V17: return POMP_A_PIN;
+    case V18: return POMP_B_PIN;
+    default: return -1; // geçersizse
   }
-  
-  
 }
 
-BLYNK_WRITE(V18)
-{
+BLYNK_WRITE(V15) {
   int value = param.asInt();
-  if (value == 1)
-  {
-    turnPumpOn();
-  }
-  else
-  {
-    turnPumpOff();
+  int physicalPin = getPhysicalPinForVirtualPin(V15);
+  if (physicalPin != -1) {
+    if (value == 1) turnPumpOn(physicalPin);
+    else digitalWrite(physicalPin, HIGH);
   }
 }
 
+BLYNK_WRITE(V16) {
+  int value = param.asInt();
+  int physicalPin = getPhysicalPinForVirtualPin(V16);
+  if (physicalPin != -1) {
+    if (value == 1) turnPumpOn(physicalPin);
+    else digitalWrite(physicalPin, HIGH);
+  }
+}
+
+BLYNK_WRITE(V17) {
+  int value = param.asInt();
+  int physicalPin = getPhysicalPinForVirtualPin(V17);
+  if (physicalPin != -1) {
+    if (value == 1) turnPumpOn(physicalPin);
+    else digitalWrite(physicalPin, HIGH);
+  }
+}
+
+BLYNK_WRITE(V18) {
+  int value = param.asInt();
+  int physicalPin = getPhysicalPinForVirtualPin(V18);
+  if (physicalPin != -1) {
+    if (value == 1) turnPumpOn(physicalPin);
+    else digitalWrite(physicalPin, HIGH);
+  }
+}
 void loopPHSensor(void *pvParameters)
 {
   while (true)
   {
     int analogValue = analogRead(PH_SENSOR_PIN);
 
-    // Gerilim hesapla (ESP32 için 3.3V referans)
-    float voltage = (analogValue / 4095.0) * 3.3;
+
+    // // Gerilim hesapla (ESP32 için 3.3V referans)
+     float voltage = (analogValue / 4095.0) * 3.3;
+    //  Serial.println(voltage);
+
 
     float pH = 1.9118 * voltage * voltage - 17.3009 * voltage + 36.4217;
 
@@ -289,6 +366,8 @@ void loopPHSensor(void *pvParameters)
   }
 }
 
+
+
 void turnPumpOff()
 {
   digitalWrite(WATER_PUMP_PIN, HIGH);
@@ -297,13 +376,8 @@ void turnPumpOff()
   waiting = 0;
 }
 
-void turnPumpOn()
-{
-  digitalWrite(WATER_PUMP_PIN, LOW);
-  Serial.println("Pump is turned on");
-  turnOn = true;
-  waiting = 0;
-}
+
+
 
 void loopWifiKeepAlive(void *pvParameters)
 {
@@ -313,11 +387,10 @@ void loopWifiKeepAlive(void *pvParameters)
     esp_task_wdt_reset();
     if (WiFi.status() != WL_CONNECTED)
     {
-
       Blynk.virtualWrite(V0, "WiFi: BAĞLI DEĞİL ❌");
-
       Serial.println("[WIFI] Reconnecting...");
-      WiFi.begin(ssid, password);
+      WiFi.begin();  // WiFiManager ile kaydedilen SSID & şifreyi kullanarak bağlanır
+
       unsigned long startAttemptTime = millis();
       while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < WIFI_TIMEOUT_MS)
       {
@@ -329,39 +402,67 @@ void loopWifiKeepAlive(void *pvParameters)
       Blynk.virtualWrite(V0, WiFi.localIP().toString());
       Serial.println("[WIFI] Connected!");
     }
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
+
+    vTaskDelay(5000 / portTICK_PERIOD_MS); // her 5 saniyede bir kontrol et
   }
 }
+// void loopWifiKeepAlive(void *pvParameters)
+// {
+//   esp_task_wdt_add(NULL);
+//   while (true)
+//   {
+//     esp_task_wdt_reset();
+//     if (WiFi.status() != WL_CONNECTED)
+//     {
 
-void loopPump(void *pvParameters)
-{
-  struct tm timeinfo;
-  turnOn = true;
-  waiting = 0;
+//       Blynk.virtualWrite(V0, "WiFi: BAĞLI DEĞİL ❌");
 
-  while (true)
-  {
-    int secToWait = 60 * (turnOn ? PUMP_ON_DURATION_MINUTES : PUMP_OFF_DURATION_MINUTES);
-    if (getLocalTime(&timeinfo))
-    {
-      if (!turnOn && timeinfo.tm_hour >= 6 && timeinfo.tm_hour < 20)
-      {
-        secToWait = 60 * (PUMP_OFF_DURATION_MINUTES / 2);
-      }
-    }
+//       Serial.println("[WIFI] Reconnecting...");
+//       WiFi.begin(ssid, password);
+//       unsigned long startAttemptTime = millis();
+//       while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < WIFI_TIMEOUT_MS)
+//       {
+//         vTaskDelay(500 / portTICK_PERIOD_MS);
+//       }
+//     }
+//     else
+//     {
+//       Blynk.virtualWrite(V0, WiFi.localIP().toString());
+//       Serial.println("[WIFI] Connected!");
+//     }
+//     vTaskDelay(1000 / portTICK_PERIOD_MS);
+//   }
+// }
 
-    digitalWrite(relayPumpPin, turnOn ? HIGH : LOW);
-    if (waiting >= secToWait)
-    {
-      waiting = 0;
-      turnOn = !turnOn;
-      turnOn ? turnPumpOn() : turnPumpOff();
-    }
+// void loopPump(void *pvParameters)
+// {
+//   struct tm timeinfo;
+//   turnOn = true;
+//   waiting = 0;
 
-    waiting++;
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
-  }
-}
+//   while (true)
+//   {
+//     int secToWait = 60 * (turnOn ? PUMP_ON_DURATION_MINUTES : PUMP_OFF_DURATION_MINUTES);
+//     if (getLocalTime(&timeinfo))
+//     {
+//       if (!turnOn && timeinfo.tm_hour >= 6 && timeinfo.tm_hour < 20)
+//       {
+//         secToWait = 60 * (PUMP_OFF_DURATION_MINUTES / 2);
+//       }
+//     }
+
+//     digitalWrite(relayPumpPin, turnOn ? HIGH : LOW);
+//     if (waiting >= secToWait)
+//     {
+//       waiting = 0;
+//       turnOn = !turnOn;
+//       turnOn ? turnPumpOn() : turnPumpOff();
+//     }
+
+//     waiting++;
+//     vTaskDelay(1000 / portTICK_PERIOD_MS);
+//   }
+// }
 
 void loopTDSMeter(void *pvParameters)
 {
@@ -428,23 +529,6 @@ void loop()
   server.handleClient();
 
 
-  for (int id = 1; id <= 10; id++) {
-    node.begin(id, Serial2);
-    node.preTransmission(preTransmission);
-    node.postTransmission(postTransmission);
-
-    uint8_t result = node.readInputRegisters(0x10, 1);
-    if (result == node.ku8MBSuccess) {
-      Serial.print("✅ Cevap verdi: Slave ID = ");
-      Serial.println(id);
-    } else {
-      Serial.print("❌ Cevap yok: Slave ID = ");
-      Serial.println(id);
-    }
-
-    delay(500);
-  }
-
 }
 
 void handleRoot()
@@ -478,7 +562,7 @@ void handleRoot()
           <h1>ESP32 Control Panel</h1>
           <p class="status">Yağmur Sensörü: )rawliteral";
 
-  html += rainStatus;
+ 
   html += R"rawliteral(</p>
           <p><a href="/pump_on"><button>Turn ON Pump</button></a></p>
           <p><a href="/pump_off"><button class="stop">Turn OFF Pump</button></a></p>
@@ -524,3 +608,4 @@ void handleUpdate()
     }
   }
 }
+
