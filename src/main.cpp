@@ -1,4 +1,4 @@
-#define BLYNK_TEMPLATE_ID "TMPL6kluPqbNR"
+#define BLYNK_TEMPLATE_ID "TMPL6kluPqbNRş"
 #define BLYNK_TEMPLATE_NAME "esp"
 #define BLYNK_AUTH_TOKEN "ckz7cJlCU7jSMkuoXq1jt11d7CSYQSrv"
 
@@ -19,10 +19,8 @@
 
 #define GMT_OFFSET_SEC 3600 * 9
 #define DAYLIGHT_OFFSET_SEC 0
-
-
+#define WATER_PUMP_PIN 33
 #define relayPumpPin 14
-#define WATER_PUMP_PIN 18
 #define PH_SENSOR_PIN 33
 #define EC_SENSOR_PIN 32
 
@@ -30,9 +28,6 @@
 #define POMP_PH_DOWN_PIN 16
 #define POMP_A_PIN 17
 #define POMP_B_PIN 18
-
-
-
 
 const char *ssid = WIFI_SSID;
 const char *password = WIFI_PASSWORD;
@@ -62,10 +57,16 @@ WebServer server(80);
 int waiting = 0;
 bool turnOn = true;
 
+bool testMode = false;
+float simulatedPH = 6.8;
+float simulatedEC = 800.0;
+
 void loopWifiKeepAlive(void *pvParameters);
 void loopPump(void *pvParameters);
 void loopPHSensor(void *pvParameters);
 void loopcheckEC(void *pvParameters);
+void loopPumpTest(void *pvParameters);
+void loopAutoControl(void *pvParameters);
 void turnPumpOff();
 void handleRoot();
 void handleUpdate(); // Web OTA için fonksiyon prototipi
@@ -94,14 +95,11 @@ void OTASetup()
   ArduinoOTA.begin();
 }
 
-
-
 void setupInput()
 {
 
   pinMode(PH_SENSOR_PIN, INPUT);
   pinMode(EC_SENSOR_PIN, INPUT);
-
 }
 
 void setOutput()
@@ -110,29 +108,40 @@ void setOutput()
   pinMode(POMP_B_PIN, OUTPUT);
   pinMode(POMP_PH_UP_PIN, OUTPUT);
   pinMode(POMP_PH_DOWN_PIN, OUTPUT);
+  pinMode(WATER_PUMP_PIN, OUTPUT);
 
   digitalWrite(POMP_A_PIN, HIGH); // ters değer yolluyoruz
   digitalWrite(POMP_B_PIN, HIGH);
   digitalWrite(POMP_PH_UP_PIN, HIGH);
   digitalWrite(POMP_PH_DOWN_PIN, HIGH);
-
+  digitalWrite(WATER_PUMP_PIN, HIGH);
 }
- 
+
+void connectToWiFi()
+{
+
+  WiFi.begin("Wokwi-GUEST", "", 6);
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    delay(100);
+    Serial.print(".");
+  }
+  Serial.println(" Connected!");
+}
 
 void setup()
 {
-  Serial.begin(115200);
-  Serial.println("Merhaba! ESP32 çalışıyor.");
 
-  WiFi.mode(WIFI_STA);
-  WiFiManager wm;
-  wm.setTimeout(180); // 3 dakika içinde işlem yapılmazsa restart
-  if (!wm.autoConnect("Hidroponik-Setup", "12345678"))
-  {
-    Serial.println("WiFi bağlantısı sağlanamadı. ESP yeniden başlatılıyor...");
-    delay(3000);
-    ESP.restart();
-  }
+  Serial.begin(115200);
+
+    WiFiManager wm; // AP oluştur
+    wm.setTimeout(180);
+    if (!wm.autoConnect("Hidroponik-Setup", "12345678"))
+    {
+      Serial.println("WiFi bağlantısı sağlanamadı. ESP yeniden başlatılıyor...");
+      delay(3000);
+      ESP.restart();
+    }
 
   Serial.println("WiFi bağlantısı başarılı! IP: " + WiFi.localIP().toString());
 
@@ -146,7 +155,6 @@ void setup()
 
   Wire.begin(21, 22);
 
-  
   server.on("/", handleRoot);
   server.on("/pump_on", []()
             {
@@ -164,7 +172,6 @@ void setup()
   setupInput();
   setOutput();
 
-
   Serial.println(WiFi.localIP());
 
   server.on("/webota", HTTP_GET, []()
@@ -178,49 +185,13 @@ void setup()
   esp_task_wdt_init(3, false);
 
   // xTaskCreatePinnedToCore(loopWifiKeepAlive, "loopWifiKeepAlive", 4096, NULL, 3, NULL, ARDUINO_RUNNING_CORE);
-  xTaskCreatePinnedToCore(loopPHSensor, "loopPHSensor", 4096, NULL, 1, NULL, ARDUINO_RUNNING_CORE);
-  xTaskCreatePinnedToCore(loopcheckEC, "loopcheckEC", 4096, NULL, 1, NULL, ARDUINO_RUNNING_CORE);
+  // xTaskCreatePinnedToCore(loopPHSensor, "loopPHSensor", 4096, NULL, 1, NULL, ARDUINO_RUNNING_CORE);
+  // xTaskCreatePinnedToCore(loopAutoControl, "loopAutoControl", 4096, NULL, 1, NULL, ARDUINO_RUNNING_CORE);
+  //  xTaskCreatePinnedToCore(loopcheckEC, "loopcheckEC", 4096, NULL, 1, NULL, ARDUINO_RUNNING_CORE);
 }
-
 
 #pragma region Pump
-void doseWithPeristaltic(int pumpPin, float mlAmount)
-{
-  float flowRate = 1.33;
-  unsigned long duration = (mlAmount / flowRate) * 1000;
-  Serial.printf("Pompa %d: %f ml için %lu ms çalışacak\n", pumpPin, mlAmount, duration);
 
-  digitalWrite(pumpPin, LOW);
-  delay(duration);
-  digitalWrite(pumpPin, HIGH);
-}
-
-void turnPumpOn(int pin)
-{
-  digitalWrite(pin, LOW);
-  Serial.println("Pump is turned on");
-  turnOn = true;
-  waiting = 0;
-}
-
-void turnPumpOff()
-{
-  digitalWrite(WATER_PUMP_PIN, HIGH);
-  Serial.println("Pump is turned off");
-  turnOn = false;
-  waiting = 0;
-}
-
-
-#pragma endregion
-void resetWiFi()
-{
-  WiFiManager wm;
-  wm.resetSettings(); // Flash'taki WiFi bilgilerini siler
-  delay(1000);
-  ESP.restart(); 
-}
-// For pump
 int getPhysicalPinForVirtualPin(int vpin)
 {
   switch (vpin)
@@ -234,11 +205,64 @@ int getPhysicalPinForVirtualPin(int vpin)
   case V18:
     return POMP_B_PIN;
   default:
-    return -1; // geçersizse
+    return -1;
   }
 }
+float pumpMlValue = 0;
+unsigned long calculatePumpDuration(float ml)
+{
+  // Verilere göre hesaplanan değer
+  float duration = 577.3 * ml + 60.5;
+  return (unsigned long)duration;
+}
+
+void doseWithPeristaltic(int pumpPin, float mlAmount)
+{
+  float flowRate = 0.90f;
+
+  unsigned long duration = calculatePumpDuration(pumpMlValue);
+  Serial.printf("Pompa %d: %f ml için %lu ms çalışacak\n", pumpPin, mlAmount, duration);
+
+  digitalWrite(pumpPin, LOW);
+  delay(duration);
+  digitalWrite(pumpPin, HIGH);
+}
+
+void turnPumpOn()
+{
+  digitalWrite(WATER_PUMP_PIN, HIGH);
+  Serial.println("Pump is turned on");
+  turnOn = true;
+  waiting = 0;
+}
+
+void turnPumpOff()
+{
+  digitalWrite(WATER_PUMP_PIN, LOW);
+  Serial.println("Pump is turned off");
+  turnOn = false;
+  waiting = 0;
+}
+
+#pragma endregion
+void resetWiFi()
+{
+  WiFiManager wm;
+  wm.resetSettings(); // Flash'taki WiFi bilgilerini siler
+  delay(1000);
+  ESP.restart();
+}
+// For pump
 
 #pragma region Blynk
+
+BLYNK_WRITE(V6)
+{
+  float mlValue = param.asFloat(); // Slider'dan gelen ml değeri
+  Serial.print("Slider'dan gelen değer (ml): ");
+  Serial.println(mlValue);
+  pumpMlValue = mlValue; // Global değişkene atıyoruz
+}
 
 BLYNK_WRITE(V15)
 {
@@ -247,7 +271,7 @@ BLYNK_WRITE(V15)
   if (physicalPin != -1)
   {
     if (value == 1)
-      turnPumpOn(physicalPin);
+      doseWithPeristaltic(physicalPin, pumpMlValue);
     else
       digitalWrite(physicalPin, HIGH);
   }
@@ -260,7 +284,7 @@ BLYNK_WRITE(V16)
   if (physicalPin != -1)
   {
     if (value == 1)
-      turnPumpOn(physicalPin);
+      doseWithPeristaltic(physicalPin, pumpMlValue);
     else
       digitalWrite(physicalPin, HIGH);
   }
@@ -273,7 +297,7 @@ BLYNK_WRITE(V17)
   if (physicalPin != -1)
   {
     if (value == 1)
-      turnPumpOn(physicalPin);
+      doseWithPeristaltic(physicalPin, pumpMlValue);
     else
       digitalWrite(physicalPin, HIGH);
   }
@@ -286,9 +310,22 @@ BLYNK_WRITE(V18)
   if (physicalPin != -1)
   {
     if (value == 1)
-      turnPumpOn(physicalPin);
+      doseWithPeristaltic(physicalPin, pumpMlValue);
     else
       digitalWrite(physicalPin, HIGH);
+  }
+}
+
+BLYNK_WRITE(V21)
+{
+  int value = param.asInt();
+  if (value)
+  {
+    turnPumpOn();
+  }
+  else
+  {
+    turnPumpOff();
   }
 }
 
@@ -344,6 +381,9 @@ void loopcheckEC(void *pvParameters)
 
 float readPH() // for endpoint
 {
+  if (testMode)
+    return simulatedPH;
+
   int analogValue = analogRead(PH_SENSOR_PIN);
   float voltage = (analogValue / 4095.0) * 3.3;
   float pH = 1.9118 * voltage * voltage - 17.3009 * voltage + 36.4217;
@@ -352,6 +392,10 @@ float readPH() // for endpoint
 
 float readEC() // for endpoint
 {
+
+  if (testMode)
+    return simulatedEC;
+
   int analogValue = analogRead(EC_SENSOR_PIN);
   float voltage = analogValue * (3.3 / 4095.0);
   float ecValue = voltage * 1000;
@@ -386,6 +430,64 @@ void loopWifiKeepAlive(void *pvParameters)
   }
 }
 
+float calculateECDoseAmount(float currentEC, float targetEC = 1200.0)
+{
+  // Her 100 µS/cm için örneğin 1.0 ml besin ekleyelim
+  float ecGap = targetEC - currentEC;
+  float dosePer100EC = 1.0;
+
+  if (ecGap <= 0)
+    return 0;
+
+  float mlToAdd = (ecGap / 100.0) * dosePer100EC;
+
+  mlToAdd = constrain(mlToAdd, 0.5, 5.0);
+
+  return mlToAdd;
+}
+
+void loopAutoControl(void *pvParameters)
+{
+  while (true)
+  {
+    float currentPH = readPH();
+    float currentEC = readEC();
+
+    Serial.printf("[AUTO] pH: %.2f | EC: %.2f\n", currentPH, currentEC);
+
+    // pH kontrolü
+    if (currentPH < 5.5)
+    {
+      Serial.println("[AUTO] pH çok düşük. pH UP pompası çalışıyor.");
+      doseWithPeristaltic(POMP_PH_UP_PIN, 2.0);
+
+      if (testMode)
+        simulatedPH += 0.2; // pH artışı simülasyonu
+    }
+    else if (currentPH > 6.5)
+    {
+      Serial.println("[AUTO] pH çok yüksek. pH DOWN pompası çalışıyor.");
+      doseWithPeristaltic(POMP_PH_DOWN_PIN, 2.0);
+
+      if (testMode)
+        simulatedPH -= 0.2; // pH düşüşü simülasyonu
+    }
+
+    // EC kontrolü
+    if (currentEC < 1200)
+    {
+      float dose = calculateECDoseAmount(currentEC);
+      Serial.printf("[AUTO] EC düşük (%.2f). A/B pompalarına %.2f ml gönderiliyor.\n", currentEC, dose);
+      doseWithPeristaltic(POMP_A_PIN, dose);
+      doseWithPeristaltic(POMP_B_PIN, dose);
+
+      if (testMode)
+        simulatedEC += dose * 100; // her ml için EC artışı (~100 µS/cm örnek)
+    }
+
+    vTaskDelay(20000 / portTICK_PERIOD_MS);
+  }
+}
 
 void loop()
 {

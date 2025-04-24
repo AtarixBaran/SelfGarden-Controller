@@ -4,7 +4,27 @@
   "editor": "wokwi",
   "parts": [
     { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": -76.8, "left": -62.36, "attrs": {} },
-    { "type": "chip-ph", "id": "chip1", "top": 86.4, "left": 86.4, "attrs": {} }
+    {
+      "type": "wokwi-text",
+      "id": "text1",
+      "top": -115.2,
+      "left": 86.4,
+      "attrs": { "text": "A Pompası" }
+    },
+    {
+      "type": "wokwi-text",
+      "id": "text3",
+      "top": 163.2,
+      "left": 67.2,
+      "attrs": { "text": "pH Up" }
+    },
+    {
+      "type": "wokwi-text",
+      "id": "text4",
+      "top": 163.2,
+      "left": 153.6,
+      "attrs": { "text": "pH Down" }
+    }
   ],
   "connections": [ [ "esp:TX", "$serialMonitor:RX", "", [] ], [ "esp:RX", "$serialMonitor:TX", "", [] ] ],
   "dependencies": {}
