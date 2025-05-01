@@ -10,14 +10,13 @@
 #include <esp_int_wdt.h>
 #include <esp_task_wdt.h>
 #include <Wire.h>
-// #include <Adafruit_APDS9960.h>
 #include <BlynkSimpleEsp32.h>
 #include <time.h>
 #include <ModbusMaster.h>
 #include <WiFiManager.h>
 #include "secrets.h"
 #include "iot_parser.h"
-
+#define LOG(msg) logToWeb(msg)
 
 #define GMT_OFFSET_SEC 3600 * 9
 #define DAYLIGHT_OFFSET_SEC 0
@@ -43,13 +42,12 @@ const char *password = WIFI_PASSWORD;
 #define ARDUINO_RUNNING_CORE 1
 #endif
 
-String getDynamicHostname()
-{
+String getDeviceID() {
   uint8_t mac[6];
   WiFi.macAddress(mac);
-  char hostname[32];
-  snprintf(hostname, sizeof(hostname), "hydroponic-%02X%02X", mac[4], mac[5]);
-  return String(hostname);
+  char id[13];
+  sprintf(id, "%02X%02X%02X%02X%02X%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  return String(id);
 }
 
 #define PUMP_ON_DURATION_MINUTES 5
@@ -74,7 +72,7 @@ void handleRoot();
 void handleUpdate(); // Web OTA için fonksiyon prototipi
 void OTASetup()
 {
-  ArduinoOTA.setHostname(getDynamicHostname().c_str());
+  ArduinoOTA.setHostname(getDeviceID().c_str());
 
   ArduinoOTA
       .onStart([]()
@@ -135,6 +133,14 @@ void connectToWiFi()
   Serial.println(" Connected!");
 }
 
+String logs = "";
+void logToWeb(String msg) {
+  Serial.println(msg);
+  logs += msg + "<br>";
+  if (logs.length() > 5000) logs = "";  
+}
+
+
 void setup()
 {
 
@@ -150,8 +156,8 @@ void setup()
     }
 
 
-    Serial.println("Version V0.2");
-
+   
+  LOG("Version V0.3");
   Serial.println("WiFi bağlantısı başarılı! IP: " + WiFi.localIP().toString());
 
   // --- Blynk bağlantısı ---
@@ -190,6 +196,16 @@ void setup()
 
   server.on("/update", HTTP_POST, []() {}, handleUpdate);
 
+
+
+  server.on("/logs", []() {
+    server.send(200, "text/html", "<html><body>" + logs + "</body></html>");
+  });
+
+  LOG(getDeviceID());
+
+
+  
   configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, "pool.ntp.org", "time.nist.gov", "time.google.com");
   esp_task_wdt_init(3, false);
 
@@ -415,7 +431,9 @@ void loopcheckEC(void *pvParameters)
     Serial.print(ecValue, 2);
     Serial.println(" µS/cm");
 
-    Blynk.virtualWrite(V4, ecValue);
+    // Blynk.virtualWrite(V4, ecValue);
+    LOG("EC VALUE: " + String(ecValue));
+
 
     vTaskDelay(1000 / portTICK_PERIOD_MS);
   }
@@ -577,6 +595,8 @@ void handleRoot()
 
   server.send(200, "text/html", html);
 }
+
+
 
 void handleUpdate()
 {
