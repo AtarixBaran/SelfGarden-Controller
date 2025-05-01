@@ -1,6 +1,6 @@
-#define BLYNK_TEMPLATE_ID "TMPL6kluPqbNRş"
-#define BLYNK_TEMPLATE_NAME "esp"
-#define BLYNK_AUTH_TOKEN "ckz7cJlCU7jSMkuoXq1jt11d7CSYQSrv"
+#define BLYNK_TEMPLATE_ID "TMPL6aXGddioc"
+#define BLYNK_TEMPLATE_NAME "ESP32"
+#define BLYNK_AUTH_TOKEN "4RJb2tQwzIuG-SHbfcnV5prlaZ2E12ze"
 
 #include <Arduino.h>
 #include <ArduinoOTA.h>
@@ -10,17 +10,19 @@
 #include <esp_int_wdt.h>
 #include <esp_task_wdt.h>
 #include <Wire.h>
-#include <Adafruit_APDS9960.h>
+// #include <Adafruit_APDS9960.h>
 #include <BlynkSimpleEsp32.h>
 #include <time.h>
 #include <ModbusMaster.h>
 #include <WiFiManager.h>
 #include "secrets.h"
+#include "iot_parser.h"
+
 
 #define GMT_OFFSET_SEC 3600 * 9
 #define DAYLIGHT_OFFSET_SEC 0
-#define WATER_PUMP_PIN 33
-#define relayPumpPin 14
+#define WATER_PUMP_PIN 14
+#define LightPin 22
 #define PH_SENSOR_PIN 33
 #define EC_SENSOR_PIN 32
 
@@ -109,12 +111,15 @@ void setOutput()
   pinMode(POMP_PH_UP_PIN, OUTPUT);
   pinMode(POMP_PH_DOWN_PIN, OUTPUT);
   pinMode(WATER_PUMP_PIN, OUTPUT);
+  pinMode(LightPin, OUTPUT);
 
   digitalWrite(POMP_A_PIN, HIGH); // ters değer yolluyoruz
   digitalWrite(POMP_B_PIN, HIGH);
   digitalWrite(POMP_PH_UP_PIN, HIGH);
   digitalWrite(POMP_PH_DOWN_PIN, HIGH);
   digitalWrite(WATER_PUMP_PIN, HIGH);
+  digitalWrite(LightPin, HIGH);
+  Serial.println("Outputs initialized");
 }
 
 void connectToWiFi()
@@ -126,6 +131,7 @@ void connectToWiFi()
     delay(100);
     Serial.print(".");
   }
+
   Serial.println(" Connected!");
 }
 
@@ -142,6 +148,9 @@ void setup()
       delay(3000);
       ESP.restart();
     }
+
+
+    Serial.println("Version V0.2");
 
   Serial.println("WiFi bağlantısı başarılı! IP: " + WiFi.localIP().toString());
 
@@ -184,10 +193,17 @@ void setup()
   configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, "pool.ntp.org", "time.nist.gov", "time.google.com");
   esp_task_wdt_init(3, false);
 
-  // xTaskCreatePinnedToCore(loopWifiKeepAlive, "loopWifiKeepAlive", 4096, NULL, 3, NULL, ARDUINO_RUNNING_CORE);
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    Blynk.virtualWrite(V0, WiFi.localIP().toString());
+  }
+   
+  
+
+  //  xTaskCreatePinnedToCore(loopWifiKeepAlive, "loopWifiKeepAlive", 4096, NULL, 3, NULL, ARDUINO_RUNNING_CORE);
   // xTaskCreatePinnedToCore(loopPHSensor, "loopPHSensor", 4096, NULL, 1, NULL, ARDUINO_RUNNING_CORE);
   // xTaskCreatePinnedToCore(loopAutoControl, "loopAutoControl", 4096, NULL, 1, NULL, ARDUINO_RUNNING_CORE);
-  //  xTaskCreatePinnedToCore(loopcheckEC, "loopcheckEC", 4096, NULL, 1, NULL, ARDUINO_RUNNING_CORE);
+    xTaskCreatePinnedToCore(loopcheckEC, "loopcheckEC", 4096, NULL, 1, NULL, ARDUINO_RUNNING_CORE);
 }
 
 #pragma region Pump
@@ -228,9 +244,18 @@ void doseWithPeristaltic(int pumpPin, float mlAmount)
   digitalWrite(pumpPin, HIGH);
 }
 
+void turnLightOn(){
+  digitalWrite(LightPin, LOW);
+  Serial.println("Light is turned on");
+}
+void turnLightOff(){
+  digitalWrite(LightPin, HIGH);
+  Serial.println("Light is turned off");
+}
+
 void turnPumpOn()
 {
-  digitalWrite(WATER_PUMP_PIN, HIGH);
+  digitalWrite(WATER_PUMP_PIN, LOW);
   Serial.println("Pump is turned on");
   turnOn = true;
   waiting = 0;
@@ -238,7 +263,7 @@ void turnPumpOn()
 
 void turnPumpOff()
 {
-  digitalWrite(WATER_PUMP_PIN, LOW);
+  digitalWrite(WATER_PUMP_PIN, HIGH);
   Serial.println("Pump is turned off");
   turnOn = false;
   waiting = 0;
@@ -258,6 +283,7 @@ void resetWiFi()
 
 BLYNK_WRITE(V6)
 {
+  
   float mlValue = param.asFloat(); // Slider'dan gelen ml değeri
   Serial.print("Slider'dan gelen değer (ml): ");
   Serial.println(mlValue);
@@ -297,7 +323,7 @@ BLYNK_WRITE(V17)
   if (physicalPin != -1)
   {
     if (value == 1)
-      doseWithPeristaltic(physicalPin, pumpMlValue);
+      doseWithPeristaltic(physicalPin,  pumpMlValue);
     else
       digitalWrite(physicalPin, HIGH);
   }
@@ -321,6 +347,19 @@ BLYNK_WRITE(V21)
   int value = param.asInt();
   if (value)
   {
+    turnLightOn();
+  }
+  else
+  {
+    turnLightOff();
+  }
+}
+
+BLYNK_WRITE(V14)
+{
+  int value = param.asInt();
+  if (value)
+  {
     turnPumpOn();
   }
   else
@@ -328,6 +367,9 @@ BLYNK_WRITE(V21)
     turnPumpOff();
   }
 }
+
+
+
 
 #pragma endregion
 
@@ -407,7 +449,6 @@ void loopWifiKeepAlive(void *pvParameters)
   esp_task_wdt_add(NULL);
   while (true)
   {
-    esp_task_wdt_reset();
     if (WiFi.status() != WL_CONNECTED)
     {
       Blynk.virtualWrite(V0, "WiFi: BAĞLI DEĞİL ❌");
@@ -426,13 +467,13 @@ void loopWifiKeepAlive(void *pvParameters)
       Serial.println("[WIFI] Connected!");
     }
 
-    vTaskDelay(5000 / portTICK_PERIOD_MS); // her 5 saniyede bir kontrol et
+    vTaskDelay(25000 / portTICK_PERIOD_MS); // her 5 saniyede bir kontrol et
   }
 }
 
 float calculateECDoseAmount(float currentEC, float targetEC = 1200.0)
 {
-  // Her 100 µS/cm için örneğin 1.0 ml besin ekleyelim
+  
   float ecGap = targetEC - currentEC;
   float dosePer100EC = 1.0;
 
